@@ -1,0 +1,1833 @@
+PART A: Frontend
+
+A1. frontend/index.html
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Text on the browser tab -->
+    <title>ABC Shop</title>
+  </head>
+  <body>
+    <!-- React draws the whole app inside this empty box -->
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
+
+
+
+frontend/src/main.jsx
+// Entry point: React starts here and draws <App /> inside <div id="root">.
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+import { BrowserRouter } from "react-router-dom";
+
+// Bootstrap styles + icons, loaded once for the whole app
+import "bootstrap/dist/css/bootstrap.min.css";
+import "bootstrap-icons/font/bootstrap-icons.css";
+import "./index.css";
+
+import App from "./App.jsx";
+import { ToastProvider } from "./context/ToastContext.jsx";
+import { AuthProvider } from "./context/AuthContext.jsx";
+
+createRoot(document.getElementById("root")).render(
+  <StrictMode>
+    {/* BrowserRouter: URLs like /login and /cart */}
+    <BrowserRouter>
+      {/* ToastProvider: pop-up messages, usable from any page (must wrap AuthProvider) */}
+      <ToastProvider>
+        {/* AuthProvider: "who is logged in", shared with every page */}
+        <AuthProvider>
+          <App />
+        </AuthProvider>
+      </ToastProvider>
+    </BrowserRouter>
+  </StrictMode>
+);
+
+
+
+
+
+frontend/src/App.jsx
+import { Route, Routes } from "react-router-dom";
+
+import Header from "./components/layout/Header.jsx";
+import Footer from "./components/layout/Footer.jsx";
+import ProtectedRoute from "./components/common/ProtectedRoute.jsx";
+import PageTransition from "./components/common/PageTransition.jsx";
+
+import HomePage from "./pages/HomePage.jsx";
+import RegisterPage from "./pages/RegisterPage.jsx";
+import LoginPage from "./pages/LoginPage.jsx";
+import ProfilePage from "./pages/ProfilePage.jsx";
+import ProductListPage from "./pages/ProductListPage.jsx";
+import ProductDetailsPage from "./pages/ProductDetailsPage.jsx";
+import CartPage from "./pages/CartPage.jsx";
+import CheckoutPage from "./pages/CheckoutPage.jsx";
+import OrderHistoryPage from "./pages/OrderHistoryPage.jsx";
+import OrderDetailsPage from "./pages/OrderDetailsPage.jsx";
+import AllOrdersPage from "./pages/AllOrdersPage.jsx";
+import NotFoundPage from "./pages/NotFoundPage.jsx";
+
+// Layout: Header + Main (changes with the URL) + Footer
+function App() {
+  return (
+    // bg-light = soft grey page background, so the white cards stand out
+    <div className="d-flex flex-column min-vh-100 bg-light">
+      <Header />
+
+      <main className="flex-grow-1 container py-4">
+        {/* PageTransition shows a short spinner every time the page changes */}
+        <PageTransition>
+          <Routes>
+            {/* Public pages */}
+            <Route path="/" element={<HomePage />} />
+            <Route path="/register" element={<RegisterPage />} />
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/products" element={<ProductListPage />} />
+            <Route path="/products/:productId" element={<ProductDetailsPage />} />
+
+            {/* Logged-in users (any role) */}
+            <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
+            <Route path="/cart" element={<ProtectedRoute><CartPage /></ProtectedRoute>} />
+            <Route path="/checkout" element={<ProtectedRoute><CheckoutPage /></ProtectedRoute>} />
+            <Route path="/orders" element={<ProtectedRoute><OrderHistoryPage /></ProtectedRoute>} />
+            <Route path="/orders/:orderId" element={<ProtectedRoute><OrderDetailsPage /></ProtectedRoute>} />
+
+            {/* Admin & Support only */}
+            <Route
+              path="/admin/orders"
+              element={<ProtectedRoute roles={["admin", "support"]}><AllOrdersPage /></ProtectedRoute>}
+            />
+
+            {/* Any other URL */}
+            <Route path="*" element={<NotFoundPage />} />
+          </Routes>
+        </PageTransition>
+      </main>
+
+      <Footer />
+    </div>
+  );
+}
+
+export default App;
+
+
+
+frontend/src/index.css
+
+/* Our own small styles. Everything else comes from Bootstrap classes. */
+
+/* Brand colours used across the site (dark navy + warm orange, like most shopping sites) */
+:root {
+  --shop-navy: #1f2937;
+  --shop-orange: #f59e0b;
+}
+
+/* The top bar */
+.shop-navbar {
+  background-color: var(--shop-navy);
+}
+
+/* Brand name: "ABC" in white, "SHOP" in orange */
+.brand-accent {
+  color: var(--shop-orange);
+}
+
+/* Home page banner */
+.hero {
+  background: linear-gradient(135deg, #1f2937 0%, #374151 100%);
+}
+
+/* Product pictures: same height everywhere, whole picture visible */
+.product-image {
+  height: 200px;
+  object-fit: contain;
+  padding: 16px;
+  background-color: #fff;
+}
+
+/* Small square picture in the cart and order tables */
+.thumb {
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+  background-color: #fff;
+}
+
+/* Grey box shown when a product has no picture */
+.image-placeholder {
+  height: 200px;
+  font-size: 3.5rem;
+}
+
+/* Cards lift a little when the mouse is over them */
+.card-hover {
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.card-hover:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.12) !important;
+}
+
+/* Footer links: readable on the dark background */
+.footer-link {
+  color: rgba(255, 255, 255, 0.7);
+  text-decoration: none;
+}
+.footer-link:hover {
+  color: #fff;
+}
+
+/* Pop-ups stay above everything else */
+.toast-container {
+  z-index: 1100;
+}
+
+
+
+A5. frontend/src/context/ToastContext.jsx (new)
+import { createContext, useCallback, useContext, useState } from "react";
+import PropTypes from "prop-types";
+
+// Pop-up messages ("toasts") that any page can show with: showToast("Saved!")
+const ToastContext = createContext(null);
+
+// An icon for each kind of message
+const ICONS = {
+  success: "bi-check-circle-fill",
+  danger: "bi-x-circle-fill",
+  info: "bi-info-circle-fill",
+};
+
+const HIDE_AFTER_MS = 3500; // each pop-up disappears by itself after 3.5 seconds
+
+export function ToastProvider({ children }) {
+  // The list of pop-ups on screen right now: [{ id, message, type }]
+  const [toasts, setToasts] = useState([]);
+
+  // Remove one pop-up (filter keeps every other one)
+  const removeToast = useCallback((id) => {
+    setToasts((previous) => previous.filter((toast) => toast.id !== id));
+  }, []);
+
+  // Add a pop-up. type = "success" (green), "danger" (red) or "info" (blue)
+  const showToast = useCallback(
+    (message, type = "success") => {
+      const id = Date.now() + Math.random(); // a unique id
+      setToasts((previous) => [...previous, { id, message, type }]);
+      setTimeout(() => removeToast(id), HIDE_AFTER_MS); // hide it later
+    },
+    [removeToast]
+  );
+
+  return (
+    <ToastContext.Provider value={{ showToast }}>
+      {children}
+
+      {/* Pop-ups appear in the top-right corner, on top of every page */}
+      <div className="toast-container position-fixed top-0 end-0 p-3">
+        {toasts.map((toast) => (
+          // "toast show" = Bootstrap pop-up, already visible. text-bg-* = colour
+          <div
+            key={toast.id}
+            className={`toast show align-items-center border-0 shadow text-bg-${toast.type}`}
+            role="status"
+            aria-live="polite"
+          >
+            <div className="d-flex">
+              <div className="toast-body d-flex align-items-center gap-2">
+                <i className={`bi ${ICONS[toast.type] ?? ICONS.info} fs-5`}></i>
+                {toast.message}
+              </div>
+              {/* The × button closes it early */}
+              <button
+                type="button"
+                className="btn-close btn-close-white me-2 m-auto"
+                aria-label="Close"
+                onClick={() => removeToast(toast.id)}
+              ></button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </ToastContext.Provider>
+  );
+}
+
+ToastProvider.propTypes = {
+  children: PropTypes.node.isRequired,
+};
+
+// Shortcut: const { showToast } = useToast();
+// eslint-disable-next-line react-refresh/only-export-components
+export const useToast = () => useContext(ToastContext);
+
+
+
+
+A7. frontend/src/utils/productImages.js (new)
+
+// Picture for each product, matched by its exact name.
+// Files live in frontend/public/images/, so each path starts with /images/
+export const PRODUCT_IMAGES = {
+  "Wireless headphones": "/images/headphones.jpg",
+  "Haunting Adeline": "/images/books.jpg",
+  "Wide legs Jeans": "/images/jeans.jpg",
+  Apron: "/images/apron.jpg",
+};
+
+// Icon shown instead, when a product has no picture
+export const CATEGORY_ICONS = {
+  Electronics: "bi-headphones",
+  Books: "bi-book",
+  Clothing: "bi-bag",
+  "Home & Kitchen": "bi-cup-hot",
+};
+
+/** The picture path for a product name, or undefined if there isn't one */
+export const imageFor = (productName) => PRODUCT_IMAGES[productName];
+
+/** The icon class for a category name (a shopping bag if unknown) */
+export const iconFor = (categoryName) => CATEGORY_ICONS[categoryName] ?? "bi-bag";
+
+
+
+
+A8. frontend/src/components/common/Loader.jsx
+
+import PropTypes from "prop-types";
+
+// A spinner in the middle of the page, with a short message under it
+function Loader({ text = "Loading..." }) {
+  return (
+    // minHeight keeps the spinner in the middle of the content area
+    <div
+      className="d-flex flex-column align-items-center justify-content-center text-secondary"
+      style={{ minHeight: "45vh" }}
+      role="status"
+    >
+      {/* spinner-border = Bootstrap's spinning circle. text-warning = orange colour */}
+      <div className="spinner-border text-warning" style={{ width: "3rem", height: "3rem" }} aria-hidden="true"></div>
+      <span className="mt-3">{text}</span>
+    </div>
+  );
+}
+
+Loader.propTypes = {
+  text: PropTypes.string,
+};
+
+export default Loader;
+
+
+
+
+
+A9. frontend/src/components/common/PageTransition.jsx (new)
+
+import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
+import PropTypes from "prop-types";
+
+import Loader from "./Loader.jsx";
+
+const DELAY_MS = 400; // how long the spinner shows when the page changes
+
+/**
+ * Shows the spinner for a moment every time the URL changes, then the page.
+ * (Pages still show their own spinner while they wait for the backend.)
+ */
+function PageTransition({ children }) {
+  const { pathname } = useLocation(); // e.g. "/login"
+  // The page that has finished "loading". While it differs from the URL, show the spinner.
+  const [readyPath, setReadyPath] = useState(null);
+
+  // Every time the URL changes: wait DELAY_MS, then mark this page as ready
+  useEffect(() => {
+    const timerId = setTimeout(() => setReadyPath(pathname), DELAY_MS);
+    return () => clearTimeout(timerId); // cleanup if the user moves on quickly
+  }, [pathname]);
+
+  if (readyPath !== pathname) return <Loader text="Loading page..." />;
+  return children;
+}
+
+PageTransition.propTypes = {
+  children: PropTypes.node.isRequired,
+};
+
+export default PageTransition;
+
+
+
+
+A10. frontend/src/components/common/AlertMessage.jsx
+
+import PropTypes from "prop-types";
+
+// An icon for each alert colour
+const ICONS = {
+  success: "bi-check-circle",
+  danger: "bi-exclamation-triangle",
+  warning: "bi-exclamation-circle",
+  info: "bi-info-circle",
+};
+
+// A coloured message box that stays on the page. Shows nothing if there's no message.
+function AlertMessage({ type = "danger", message = "" }) {
+  if (!message) return null;
+
+  return (
+    <div className={`alert alert-${type} d-flex align-items-center gap-2`} role="alert">
+      <i className={`bi ${ICONS[type]}`}></i>
+      <span>{message}</span>
+    </div>
+  );
+}
+
+AlertMessage.propTypes = {
+  type: PropTypes.oneOf(["success", "danger", "warning", "info"]),
+  message: PropTypes.string,
+};
+
+export default AlertMessage;
+
+
+
+
+
+A11. frontend/src/components/common/FormInput.jsx
+
+import PropTypes from "prop-types";
+
+/**
+ * One form field: label + icon + input + red error (or grey hint).
+ * Used by the Register and Login forms.
+ */
+function FormInput({
+  label,
+  name,
+  type = "text",
+  icon = "",
+  value,
+  onChange,
+  onBlur,
+  error = "",
+  hint = "",
+  autoComplete = "off",
+}) {
+  const inputId = `field-${name}`;
+
+  return (
+    <div className="mb-3">
+      <label htmlFor={inputId} className="form-label fw-semibold small">
+        {label}
+      </label>
+
+      {/* input-group = icon box joined to the input. has-validation keeps the corners right with an error */}
+      <div className={`input-group ${error ? "has-validation" : ""}`}>
+        {icon && (
+          <span className="input-group-text bg-white">
+            <i className={`bi ${icon} text-secondary`}></i>
+          </span>
+        )}
+        <input
+          id={inputId}
+          name={name}
+          type={type}
+          value={value}
+          onChange={onChange}
+          onBlur={onBlur}
+          autoComplete={autoComplete}
+          className={`form-control ${error ? "is-invalid" : ""}`} // is-invalid = red border
+          aria-invalid={Boolean(error)}
+          aria-describedby={`${inputId}-message`}
+        />
+        {/* Red message (Bootstrap shows it because the input has is-invalid) */}
+        {error && (
+          <div id={`${inputId}-message`} className="invalid-feedback">
+            {error}
+          </div>
+        )}
+      </div>
+
+      {/* Grey hint, only when there's no error */}
+      {!error && hint && (
+        <div id={`${inputId}-message`} className="form-text">
+          {hint}
+        </div>
+      )}
+    </div>
+  );
+}
+
+FormInput.propTypes = {
+  label: PropTypes.string.isRequired,
+  name: PropTypes.string.isRequired,
+  type: PropTypes.oneOf(["text", "email", "password", "tel", "number"]),
+  icon: PropTypes.string, // a Bootstrap icon class, e.g. "bi-envelope"
+  value: PropTypes.string.isRequired,
+  onChange: PropTypes.func.isRequired,
+  onBlur: PropTypes.func.isRequired,
+  error: PropTypes.string,
+  hint: PropTypes.string,
+  autoComplete: PropTypes.string,
+};
+
+export default FormInput;
+
+
+
+
+
+A12. frontend/src/components/common/ProtectedRoute.jsx
+import { Link, Navigate, useLocation } from "react-router-dom";
+import PropTypes from "prop-types";
+
+import Loader from "./Loader.jsx";
+import { useAuth } from "../../context/AuthContext.jsx";
+
+/**
+ * Guards pages. roles (optional) = only these roles may open the page
+ * (the frontend version of the backend's 403 rule).
+ */
+function ProtectedRoute({ children, roles = [] }) {
+  const { isLoggedIn, loading, user } = useAuth();
+  const location = useLocation();
+
+  // Still checking a saved token → wait
+  if (loading) return <Loader text="Checking your login..." />;
+
+  // Not logged in → Login page, remembering where we wanted to go
+  if (!isLoggedIn) {
+    return <Navigate to="/login" replace state={{ from: location.pathname, message: "Please log in to continue." }} />;
+  }
+
+  // Logged in but this role isn't allowed
+  if (roles.length > 0 && !roles.includes(user.role)) {
+    return (
+      <div className="text-center py-5">
+        <i className="bi bi-shield-lock display-4 text-danger"></i>
+        <h1 className="h4 mt-3">Access denied</h1>
+        <p className="text-secondary">You don&apos;t have permission to view this page.</p>
+        <Link to="/" className="btn btn-dark">
+          Go to the home page
+        </Link>
+      </div>
+    );
+  }
+
+  return children; // allowed → show the page
+}
+
+ProtectedRoute.propTypes = {
+  children: PropTypes.node.isRequired,
+  roles: PropTypes.arrayOf(PropTypes.oneOf(["customer", "admin", "support"])),
+};
+
+export default ProtectedRoute;
+
+
+
+
+
+A13. frontend/src/components/layout/Menu.jsx
+
+import { NavLink } from "react-router-dom";
+import PropTypes from "prop-types";
+
+import { useAuth } from "../../context/AuthContext.jsx";
+
+// Menu links. icon = Bootstrap icon. roles = only these roles see the link.
+const MENU_LINKS = [
+  { path: "/", label: "Home", icon: "bi-house" },
+  { path: "/products", label: "Products", icon: "bi-grid" },
+  { path: "/orders", label: "My Orders", icon: "bi-receipt" },
+  { path: "/admin/orders", label: "All Orders", icon: "bi-clipboard-data", roles: ["admin", "support"] },
+];
+
+// onNavigate = called after a click (the Header uses it to close the phone menu)
+function Menu({ onNavigate }) {
+  const { user } = useAuth();
+
+  // Keep links with no roles, or whose roles include the user's role
+  const visibleLinks = MENU_LINKS.filter((link) => !link.roles || (user && link.roles.includes(user.role)));
+
+  return (
+    // navbar-nav = Bootstrap's menu list inside a navbar. me-auto pushes the rest to the right
+    <ul className="navbar-nav me-auto mb-2 mb-lg-0">
+      {visibleLinks.map((link) => (
+        <li className="nav-item" key={link.path}>
+          {/* NavLink adds "active" to the current page's link (Bootstrap makes it brighter) */}
+          <NavLink to={link.path} end={link.path === "/"} className="nav-link" onClick={onNavigate}>
+            <i className={`bi ${link.icon} me-1`}></i>
+            {link.label}
+          </NavLink>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+Menu.propTypes = {
+  onNavigate: PropTypes.func,
+};
+
+export default Menu;
+
+
+
+
+
+A14. frontend/src/components/layout/Header.jsx
+
+import { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+
+import Menu from "./Menu.jsx";
+import { useAuth } from "../../context/AuthContext.jsx";
+import { useToast } from "../../context/ToastContext.jsx";
+
+// Top bar: brand, menu, cart, and the user area. Collapses into ☰ on phones.
+function Header() {
+  const { user, isLoggedIn, logout } = useAuth();
+  const { showToast } = useToast();
+  const navigate = useNavigate();
+  // Is the phone menu open? (Bootstrap's own script isn't loaded, so React opens/closes it)
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  const closeMenu = () => setMenuOpen(false);
+
+  const handleLogout = () => {
+    logout();
+    closeMenu();
+    showToast("You have been logged out.", "info");
+    navigate("/login");
+  };
+
+  return (
+    // navbar-dark = light text. shop-navbar = our navy colour. sticky-top = stays visible when scrolling
+    <header className="sticky-top shadow-sm">
+      <nav className="navbar navbar-expand-lg navbar-dark shop-navbar">
+        <div className="container">
+          {/* Brand */}
+          <Link to="/" className="navbar-brand fw-bold fs-4" onClick={closeMenu}>
+            <i className="bi bi-bag-heart-fill text-warning me-2"></i>
+            ABC <span className="text-warning">SHOP</span>
+          </Link>
+
+          {/* ☰ button, only visible on small screens */}
+          <button
+            className="navbar-toggler"
+            type="button"
+            aria-label="Toggle navigation"
+            aria-expanded={menuOpen}
+            onClick={() => setMenuOpen(!menuOpen)}
+          >
+            <span className="navbar-toggler-icon"></span>
+          </button>
+
+          {/* "collapse" hides it on phones; adding "show" opens it */}
+          <div className={`collapse navbar-collapse ${menuOpen ? "show" : ""}`}>
+            <Menu onNavigate={closeMenu} />
+
+            <div className="d-flex flex-wrap align-items-center gap-2">
+              {isLoggedIn ? (
+                <>
+                  {/* Role badge for staff only */}
+                  {user.role !== "customer" && (
+                    <span className="badge text-bg-warning text-capitalize">{user.role}</span>
+                  )}
+
+                  <Link to="/cart" className="btn btn-outline-light btn-sm" onClick={closeMenu}>
+                    <i className="bi bi-cart3 me-1"></i>Cart
+                  </Link>
+
+                  <Link to="/profile" className="btn btn-link text-light text-decoration-none btn-sm" onClick={closeMenu}>
+                    <i className="bi bi-person-circle me-1"></i>
+                    {user.name}
+                  </Link>
+
+                  <button type="button" className="btn btn-warning btn-sm fw-semibold" onClick={handleLogout}>
+                    <i className="bi bi-box-arrow-right me-1"></i>Logout
+                  </button>
+                </>
+              ) : (
+                <>
+                  <Link to="/cart" className="btn btn-outline-light btn-sm" onClick={closeMenu}>
+                    <i className="bi bi-cart3 me-1"></i>Cart
+                  </Link>
+                  <Link to="/login" className="btn btn-outline-light btn-sm" onClick={closeMenu}>
+                    Login
+                  </Link>
+                  <Link to="/register" className="btn btn-warning btn-sm fw-semibold" onClick={closeMenu}>
+                    Register
+                  </Link>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+  );
+}
+
+export default Header;
+
+
+
+
+A15. frontend/src/components/layout/Footer.jsx
+import { Link } from "react-router-dom";
+
+// Footer: about, links, contact, copyright
+function Footer() {
+  const currentYear = new Date().getFullYear(); // updates by itself every year
+
+  return (
+    // mt-auto pushes the footer to the bottom of the page
+    <footer className="shop-navbar text-light mt-auto">
+      <div className="container py-5">
+        <div className="row g-4">
+          <div className="col-md-4">
+            <h5 className="fw-bold">
+              <i className="bi bi-bag-heart-fill text-warning me-2"></i>
+              ABC <span className="text-warning">SHOP</span>
+            </h5>
+            <p className="small text-white-50 mb-0">Your Own Shubhangini&apos;s Stop. Quality products, honest prices.</p>
+          </div>
+
+          <div className="col-6 col-md-2">
+            <h6 className="text-uppercase small fw-bold">Shop</h6>
+            <ul className="list-unstyled small mb-0">
+              <li className="mb-1"><Link to="/products" className="footer-link">All Products</Link></li>
+              <li><Link to="/cart" className="footer-link">My Cart</Link></li>
+            </ul>
+          </div>
+
+          <div className="col-6 col-md-3">
+            <h6 className="text-uppercase small fw-bold">Account</h6>
+            <ul className="list-unstyled small mb-0">
+              <li className="mb-1"><Link to="/orders" className="footer-link">My Orders</Link></li>
+              <li><Link to="/profile" className="footer-link">My Account</Link></li>
+            </ul>
+          </div>
+
+          <div className="col-md-3">
+            <h6 className="text-uppercase small fw-bold">Contact Us</h6>
+            <p className="small text-white-50 mb-1">
+              <i className="bi bi-envelope me-2"></i>support@abcshop.com
+            </p>
+            <p className="small text-white-50 mb-0">
+              <i className="bi bi-telephone me-2"></i>+91 98765 43210
+            </p>
+          </div>
+        </div>
+
+        <hr className="border-secondary my-4" />
+        <p className="small text-center text-white-50 mb-0">© {currentYear} ABC Shop. All rights reserved.</p>
+      </div>
+    </footer>
+  );
+}
+
+export default Footer;
+
+
+
+A16. frontend/src/components/products/SearchBar.jsx
+
+import PropTypes from "prop-types";
+
+// Search box with a magnifying-glass icon. The page owns the text (value) and gets each change (onChange).
+function SearchBar({ value, onChange }) {
+  return (
+    <div className="input-group input-group-lg shadow-sm mb-4">
+      <span className="input-group-text bg-white border-end-0">
+        <i className="bi bi-search text-secondary"></i>
+      </span>
+      <input
+        type="search"
+        className="form-control border-start-0"
+        placeholder="Search by product name or category..."
+        aria-label="Search products"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </div>
+  );
+}
+
+SearchBar.propTypes = {
+  value: PropTypes.string.isRequired,
+  onChange: PropTypes.func.isRequired,
+};
+
+export default SearchBar;
+
+
+
+
+
+A17. frontend/src/components/products/ProductCard.jsx
+
+import { Link } from "react-router-dom";
+import PropTypes from "prop-types";
+
+import { iconFor, imageFor } from "../../utils/productImages.js";
+
+// One product card: picture, category, name, price, stock, Add to Cart (+ count badge)
+function ProductCard({ product, onAddToCart, addedCount = 0 }) {
+  const inStock = product.available_quantity > 0;
+  const image = imageFor(product.product_name);
+  const detailsUrl = `/products/${product.product_id}`;
+
+  return (
+    // h-100 = all cards in a row have the same height. card-hover = lifts on mouse-over
+    <div className="card h-100 border-0 shadow-sm card-hover overflow-hidden">
+      {/* Picture (or a grey box with an icon) links to the details page */}
+      <Link to={detailsUrl}>
+        {image ? (
+          <img src={image} alt={product.product_name} className="card-img-top product-image" />
+        ) : (
+          <div className="image-placeholder bg-light d-flex align-items-center justify-content-center text-secondary">
+            <i className={`bi ${iconFor(product.category.category_name)}`}></i>
+          </div>
+        )}
+      </Link>
+
+      <div className="card-body d-flex flex-column">
+        <span className="badge text-bg-light border align-self-start mb-2">{product.category.category_name}</span>
+
+        <h5 className="card-title h6 mb-2">
+          <Link to={detailsUrl} className="text-dark text-decoration-none">
+            {product.product_name}
+          </Link>
+        </h5>
+
+        {/* mt-auto pushes price + button to the bottom of the card */}
+        <div className="mt-auto">
+          <div className="d-flex justify-content-between align-items-center mb-3">
+            <span className="fs-5 fw-bold">₹{product.price}</span>
+            <small className={inStock ? "text-success" : "text-danger"}>
+              <i className={`bi ${inStock ? "bi-check-circle" : "bi-x-circle"} me-1`}></i>
+              {inStock ? `${product.available_quantity} in stock` : "Out of stock"}
+            </small>
+          </div>
+
+          {inStock ? (
+            <div className="d-flex align-items-center gap-2">
+              <button type="button" className="btn btn-warning fw-semibold flex-grow-1" onClick={() => onAddToCart(product)}>
+                <i className="bi bi-cart-plus me-1"></i>Add to Cart
+              </button>
+              {/* +1, +2... after each successful add */}
+              {addedCount > 0 && <span className="badge rounded-pill text-bg-success fs-6">+{addedCount}</span>}
+            </div>
+          ) : (
+            <button type="button" className="btn btn-secondary w-100" disabled>
+              Out of Stock
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ProductCard.propTypes = {
+  product: PropTypes.shape({
+    product_id: PropTypes.number.isRequired,
+    product_name: PropTypes.string.isRequired,
+    price: PropTypes.oneOfType([PropTypes.string, PropTypes.number]).isRequired,
+    available_quantity: PropTypes.number.isRequired,
+    category: PropTypes.shape({ category_name: PropTypes.string.isRequired }).isRequired,
+  }).isRequired,
+  onAddToCart: PropTypes.func.isRequired,
+  addedCount: PropTypes.number,
+};
+
+export default ProductCard;
+
+
+
+
+A18. frontend/src/components/cart/CartItemRow.jsx
+
+import { useState } from "react";
+import PropTypes from "prop-types";
+
+import { validateQuantity } from "../../utils/validators.js";
+import { iconFor, imageFor } from "../../utils/productImages.js";
+
+/**
+ * One item in the cart: picture, name, price, quantity box, subtotal, Update, Remove.
+ * The row only checks the quantity; CartPage does the saving (onUpdate / onRemove).
+ */
+function CartItemRow({ item, stock, onUpdate, onRemove }) {
+  // What the user is typing (text), before clicking Update
+  const [quantity, setQuantity] = useState(String(item.quantity));
+
+  const error = validateQuantity(quantity, stock); // "" when valid
+  const changed = Number(quantity) !== item.quantity; // did the number change?
+  const subtotal = (Number(item.product.price) * item.quantity).toFixed(2);
+  const image = imageFor(item.product.product_name);
+
+  return (
+    // list-group-item = one row in a Bootstrap list
+    <div className="list-group-item py-3">
+      <div className="row g-3 align-items-center">
+        {/* Picture + name + price */}
+        <div className="col-md-5 d-flex align-items-center gap-3">
+          {image ? (
+            <img src={image} alt="" className="thumb rounded border" />
+          ) : (
+            <span className="thumb rounded border bg-light d-flex align-items-center justify-content-center text-secondary">
+              <i className={`bi ${iconFor("")}`}></i>
+            </span>
+          )}
+          <div>
+            <div className="fw-semibold">{item.product.product_name}</div>
+            <small className="text-secondary">₹{item.product.price} each</small>
+          </div>
+        </div>
+
+        {/* Quantity box + Update */}
+        <div className="col-7 col-md-4">
+          <div className="input-group input-group-sm has-validation">
+            <input
+              type="number"
+              min="1"
+              max={stock}
+              aria-label={`Quantity of ${item.product.product_name}`}
+              className={`form-control ${error ? "is-invalid" : ""}`}
+              value={quantity}
+              onChange={(event) => setQuantity(event.target.value)}
+            />
+            {/* Disabled while the quantity is invalid or unchanged */}
+            <button
+              type="button"
+              className="btn btn-outline-dark"
+              disabled={Boolean(error) || !changed}
+              onClick={() => onUpdate(item.cart_item_id, Number(quantity))}
+            >
+              Update
+            </button>
+            {error && <div className="invalid-feedback">{error}</div>}
+          </div>
+        </div>
+
+        {/* Subtotal + Remove */}
+        <div className="col-5 col-md-3 d-flex align-items-center justify-content-end gap-3">
+          <span className="fw-bold">₹{subtotal}</span>
+          <button
+            type="button"
+            className="btn btn-sm btn-outline-danger"
+            aria-label={`Remove ${item.product.product_name}`}
+            onClick={() => onRemove(item.cart_item_id)}
+          >
+            <i className="bi bi-trash"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+CartItemRow.propTypes = {
+  item: PropTypes.shape({
+    cart_item_id: PropTypes.number.isRequired,
+    quantity: PropTypes.number.isRequired,
+    product: PropTypes.shape({
+      product_name: PropTypes.string.isRequired,
+      price: PropTypes.oneOfType([PropTypes.string, PropTypes.number]).isRequired,
+    }).isRequired,
+  }).isRequired,
+  stock: PropTypes.number.isRequired,
+  onUpdate: PropTypes.func.isRequired,
+  onRemove: PropTypes.func.isRequired,
+};
+
+export default CartItemRow;
+
+
+
+
+A19. frontend/src/components/orders/OrderStatusBadge.jsx (new)
+
+import PropTypes from "prop-types";
+
+// Green "Placed" or grey "Cancelled" badge (the word comes from the backend)
+function OrderStatusBadge({ status }) {
+  const cancelled = status === "cancelled";
+  return (
+    <span className={`badge rounded-pill text-capitalize ${cancelled ? "text-bg-secondary" : "text-bg-success"}`}>
+      <i className={`bi ${cancelled ? "bi-x-circle" : "bi-check-circle"} me-1`}></i>
+      {status}
+    </span>
+  );
+}
+
+OrderStatusBadge.propTypes = {
+  status: PropTypes.string.isRequired,
+};
+
+export default OrderStatusBadge;
+
+
+
+
+
+A20. frontend/src/components/orders/OrderItemsTable.jsx
+import PropTypes from "prop-types";
+
+import { imageFor, iconFor } from "../../utils/productImages.js";
+
+// Table of products: picture, name, qty, price, subtotal + total. Used on 3 pages.
+function OrderItemsTable({ details, total }) {
+  return (
+    <div className="table-responsive">
+      <table className="table align-middle mb-0">
+        <thead className="table-light">
+          <tr>
+            <th>Product</th>
+            <th className="text-center">Qty</th>
+            <th className="text-end">Price</th>
+            <th className="text-end">Subtotal</th>
+          </tr>
+        </thead>
+        <tbody>
+          {details.map((line) => {
+            const image = imageFor(line.product.product_name);
+            return (
+              <tr key={line.order_detail_id}>
+                <td>
+                  <div className="d-flex align-items-center gap-3">
+                    {/* Small picture, or a grey box with an icon */}
+                    {image ? (
+                      <img src={image} alt="" className="thumb rounded border" />
+                    ) : (
+                      <span className="thumb rounded border bg-light d-flex align-items-center justify-content-center text-secondary">
+                        <i className={`bi ${iconFor("")}`}></i>
+                      </span>
+                    )}
+                    <span className="fw-semibold">{line.product.product_name}</span>
+                  </div>
+                </td>
+                <td className="text-center">{line.quantity}</td>
+                <td className="text-end">₹{line.price}</td>
+                <td className="text-end">₹{(Number(line.price) * line.quantity).toFixed(2)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+        <tfoot>
+          <tr>
+            <th colSpan={3} className="text-end">
+              Total
+            </th>
+            <th className="text-end fs-5">₹{total}</th>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  );
+}
+
+OrderItemsTable.propTypes = {
+  details: PropTypes.arrayOf(
+    PropTypes.shape({
+      order_detail_id: PropTypes.number.isRequired,
+      quantity: PropTypes.number.isRequired,
+      price: PropTypes.oneOfType([PropTypes.string, PropTypes.number]).isRequired,
+      product: PropTypes.shape({ product_name: PropTypes.string.isRequired }).isRequired,
+    })
+  ).isRequired,
+  total: PropTypes.oneOfType([PropTypes.string, PropTypes.number]).isRequired,
+};
+
+export default OrderItemsTable;
+
+
+
+
+
+A21. frontend/src/pages/HomePage.jsx
+
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+
+import heroImage from "../assets/hero.png"; // picture from src/assets (Vite gives us its URL)
+import { getCategories } from "../services/productService.js";
+import { iconFor } from "../utils/productImages.js";
+
+// Three reasons to shop here (shown under the banner)
+const FEATURES = [
+  { icon: "bi-truck", title: "Fast delivery", text: "Quick shipping on every order." },
+  { icon: "bi-shield-check", title: "Secure shopping", text: "Your account is protected with login tokens." },
+  { icon: "bi-arrow-repeat", title: "Easy cancellations", text: "Changed your mind? Cancel from My Orders." },
+];
+
+// Home page: banner, categories, features
+function HomePage() {
+  const [categories, setCategories] = useState([]);
+
+  // Load the categories once, for the "Shop by category" tiles
+  useEffect(() => {
+    getCategories()
+      .then((data) => setCategories(Array.isArray(data) ? data : []))
+      .catch(() => setCategories([])); // optional section: just hide it on error
+  }, []);
+
+  return (
+    <>
+      {/* Banner: dark background, text on the left, picture on the right */}
+      <section className="hero text-white rounded-4 shadow-sm p-4 p-md-5 mb-5">
+        <div className="row align-items-center g-4">
+          <div className="col-lg-6">
+            <span className="badge text-bg-warning mb-3">New arrivals every week</span>
+            <h1 className="display-5 fw-bold">Welcome to ABC Shop</h1>
+            <p className="lead text-white-50">Electronics, books, clothing, and home essentials in one place.</p>
+            <Link to="/products" className="btn btn-warning btn-lg fw-semibold px-4">
+              Shop now <i className="bi bi-arrow-right ms-1"></i>
+            </Link>
+          </div>
+          <div className="col-lg-6 text-center">
+            {/* img-fluid = shrink to fit small screens */}
+            <img src={heroImage} alt="ABC Shop" className="img-fluid" style={{ maxHeight: "320px" }} />
+          </div>
+        </div>
+      </section>
+
+      {/* Category tiles (only if the backend sent some) */}
+      {categories.length > 0 && (
+        <section className="mb-5">
+          <h2 className="h4 fw-bold mb-3">Shop by category</h2>
+          <div className="row row-cols-2 row-cols-md-4 g-3">
+            {categories.map((category) => (
+              <div className="col" key={category.category_id}>
+                {/* ?category=... pre-fills the search box on the Products page */}
+                <Link
+                  to={`/products?category=${encodeURIComponent(category.category_name)}`}
+                  className="card h-100 border-0 shadow-sm card-hover text-decoration-none text-dark"
+                >
+                  <div className="card-body text-center py-4">
+                    <i className={`bi ${iconFor(category.category_name)} fs-1 text-warning`}></i>
+                    <div className="fw-semibold mt-2">{category.category_name}</div>
+                  </div>
+                </Link>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Feature boxes */}
+      <section className="row g-3">
+        {FEATURES.map((feature) => (
+          <div className="col-md-4" key={feature.title}>
+            <div className="d-flex gap-3 p-3 bg-white rounded-3 shadow-sm h-100">
+              <i className={`bi ${feature.icon} fs-2 text-warning`}></i>
+              <div>
+                <h3 className="h6 fw-bold mb-1">{feature.title}</h3>
+                <p className="small text-secondary mb-0">{feature.text}</p>
+              </div>
+            </div>
+          </div>
+        ))}
+      </section>
+    </>
+  );
+}
+
+export default HomePage;
+
+
+
+A22. frontend/src/pages/RegisterPage.jsx
+
+import { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+
+import FormInput from "../components/common/FormInput.jsx";
+import AlertMessage from "../components/common/AlertMessage.jsx";
+import { useForm } from "../hooks/useForm.js";
+import { validateRegisterForm } from "../utils/validators.js";
+import { registerUser } from "../services/authService.js";
+import { useToast } from "../context/ToastContext.jsx";
+
+// Blank form (also what Reset goes back to)
+const INITIAL_VALUES = { name: "", email: "", mobile: "", password: "" };
+
+// Milestone 1: Registration with validations
+function RegisterPage() {
+  const navigate = useNavigate();
+  const { showToast } = useToast();
+  const { values, isValid, handleChange, handleBlur, touchAll, reset, errorFor } = useForm(
+    INITIAL_VALUES,
+    validateRegisterForm
+  );
+  const [submitting, setSubmitting] = useState(false); // true while the request runs
+  const [serverError, setServerError] = useState(""); // message from the backend
+
+  const handleSubmit = async (event) => {
+    event.preventDefault(); // no page reload
+    touchAll(); // show every field's error
+    if (!isValid) return; // stop if anything is invalid
+
+    setSubmitting(true);
+    setServerError("");
+    try {
+      await registerUser({
+        name: values.name.trim(),
+        email: values.email.trim(),
+        mobile: values.mobile.trim(),
+        password: values.password,
+      });
+      // Pop-up, then go to Login
+      showToast("Registration successful! Please log in.", "success");
+      navigate("/login");
+    } catch (error) {
+      setServerError(error.message); // e.g. "Email is already Registered."
+      showToast(error.message, "danger");
+      setSubmitting(false);
+    }
+  };
+
+  const handleReset = () => {
+    reset();
+    setServerError("");
+  };
+
+  return (
+    <div className="row justify-content-center">
+      <div className="col-md-8 col-lg-5">
+        <div className="card border-0 shadow-sm">
+          <div className="card-body p-4 p-md-5">
+            <div className="text-center mb-4">
+              <i className="bi bi-person-plus-fill display-6 text-warning"></i>
+              <h1 className="h3 fw-bold mt-2">Create your account</h1>
+              <p className="text-secondary small mb-0">Join ABC Shop in less than a minute.</p>
+            </div>
+
+            <AlertMessage type="danger" message={serverError} />
+
+            {/* noValidate: our messages instead of the browser's */}
+            <form onSubmit={handleSubmit} noValidate>
+              <FormInput label="Full Name" name="name" icon="bi-person" value={values.name}
+                onChange={handleChange} onBlur={handleBlur} error={errorFor("name")} autoComplete="name" />
+              <FormInput label="Email address" name="email" type="email" icon="bi-envelope" value={values.email}
+                onChange={handleChange} onBlur={handleBlur} error={errorFor("email")} autoComplete="email" />
+              <FormInput label="Mobile number" name="mobile" type="tel" icon="bi-phone" value={values.mobile}
+                onChange={handleChange} onBlur={handleBlur} error={errorFor("mobile")}
+                hint="10 digits, e.g. 9876543210" autoComplete="tel" />
+              <FormInput label="Password" name="password" type="password" icon="bi-lock" value={values.password}
+                onChange={handleChange} onBlur={handleBlur} error={errorFor("password")}
+                hint="8–25 characters with an uppercase letter, a lowercase letter, a number, and a special character."
+                autoComplete="new-password" />
+
+              <div className="d-flex gap-2 mt-4">
+                {/* Enabled only when every field is valid; disabled while sending */}
+                <button type="submit" className="btn btn-warning fw-semibold flex-grow-1" disabled={!isValid || submitting}>
+                  {submitting ? (
+                    <><span className="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>Registering...</>
+                  ) : (
+                    "Register"
+                  )}
+                </button>
+                <button type="button" className="btn btn-outline-secondary" onClick={handleReset} disabled={submitting}>
+                  Reset
+                </button>
+              </div>
+            </form>
+
+            <p className="text-center small mt-4 mb-0">
+              Already have an account? <Link to="/login" className="fw-semibold">Login</Link>
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default RegisterPage;
+
+
+
+
+A23. frontend/src/pages/LoginPage.jsx
+
+import { useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+
+import FormInput from "../components/common/FormInput.jsx";
+import AlertMessage from "../components/common/AlertMessage.jsx";
+import { useForm } from "../hooks/useForm.js";
+import { validateLoginForm } from "../utils/validators.js";
+import { useAuth } from "../context/AuthContext.jsx";
+import { useToast } from "../context/ToastContext.jsx";
+
+const INITIAL_VALUES = { email: "", password: "" };
+
+// Milestone 1: Login with validations (works for customer, admin and support)
+function LoginPage() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { login } = useAuth();
+  const { showToast } = useToast();
+
+  const { values, isValid, handleChange, handleBlur, touchAll, reset, errorFor } = useForm(
+    INITIAL_VALUES,
+    validateLoginForm
+  );
+  const [submitting, setSubmitting] = useState(false);
+  const [serverError, setServerError] = useState("");
+
+  // Sent by other pages: why we're here, and where to go after login
+  const infoMessage = location.state?.message ?? "";
+  const redirectTo = location.state?.from ?? "/";
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    touchAll();
+    if (!isValid) return;
+
+    setSubmitting(true);
+    setServerError("");
+    try {
+      const me = await login(values.email.trim(), values.password);
+      showToast(`Welcome back, ${me.name}!`, "success");
+      navigate(redirectTo, { replace: true });
+    } catch (error) {
+      setServerError(error.message); // e.g. "Invalid email or password."
+      showToast(error.message, "danger");
+      setSubmitting(false);
+    }
+  };
+
+  const handleReset = () => {
+    reset();
+    setServerError("");
+  };
+
+  return (
+    <div className="row justify-content-center">
+      <div className="col-md-8 col-lg-5">
+        <div className="card border-0 shadow-sm">
+          <div className="card-body p-4 p-md-5">
+            <div className="text-center mb-4">
+              <i className="bi bi-box-arrow-in-right display-6 text-warning"></i>
+              <h1 className="h3 fw-bold mt-2">Welcome back</h1>
+              <p className="text-secondary small mb-0">Log in to continue shopping.</p>
+            </div>
+
+            <AlertMessage type="info" message={infoMessage} />
+            <AlertMessage type="danger" message={serverError} />
+
+            <form onSubmit={handleSubmit} noValidate>
+              <FormInput label="Email address" name="email" type="email" icon="bi-envelope" value={values.email}
+                onChange={handleChange} onBlur={handleBlur} error={errorFor("email")} autoComplete="email" />
+              <FormInput label="Password" name="password" type="password" icon="bi-lock" value={values.password}
+                onChange={handleChange} onBlur={handleBlur} error={errorFor("password")} autoComplete="current-password" />
+
+              <div className="d-flex gap-2 mt-4">
+                <button type="submit" className="btn btn-warning fw-semibold flex-grow-1" disabled={!isValid || submitting}>
+                  {submitting ? (
+                    <><span className="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>Logging in...</>
+                  ) : (
+                    "Login"
+                  )}
+                </button>
+                <button type="button" className="btn btn-outline-secondary" onClick={handleReset} disabled={submitting}>
+                  Reset
+                </button>
+              </div>
+            </form>
+
+            <p className="text-center small mt-4 mb-0">
+              Don&apos;t have an account? <Link to="/register" className="fw-semibold">Register</Link>
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default LoginPage;
+
+
+
+A24. frontend/src/pages/ProfilePage.jsx
+import { Link, useNavigate } from "react-router-dom";
+
+import { useAuth } from "../context/AuthContext.jsx";
+import { useToast } from "../context/ToastContext.jsx";
+
+// Profile: the logged-in user's details (loaded at login from GET /api/users/me)
+function ProfilePage() {
+  const { user, logout } = useAuth();
+  const { showToast } = useToast();
+  const navigate = useNavigate();
+
+  const handleLogout = () => {
+    logout();
+    showToast("You have been logged out.", "info");
+    navigate("/login");
+  };
+
+  // Each detail row: icon, label, value
+  const details = [
+    { icon: "bi-person", label: "Name", value: user.name },
+    { icon: "bi-envelope", label: "Email", value: user.email },
+    { icon: "bi-phone", label: "Mobile", value: user.mobile },
+    { icon: "bi-person-badge", label: "Role", value: user.role },
+  ];
+
+  return (
+    <div className="row justify-content-center">
+      <div className="col-md-8 col-lg-6">
+        <div className="card border-0 shadow-sm">
+          {/* Coloured top with a big icon and the name */}
+          <div className="card-header hero text-white text-center py-4 border-0">
+            <i className="bi bi-person-circle display-4 text-warning"></i>
+            <h1 className="h4 fw-bold mt-2 mb-0">{user.name}</h1>
+            <span className="badge text-bg-warning text-capitalize mt-2">{user.role}</span>
+          </div>
+
+          <ul className="list-group list-group-flush">
+            {details.map((row) => (
+              <li className="list-group-item d-flex align-items-center gap-3 py-3" key={row.label}>
+                <i className={`bi ${row.icon} text-warning fs-5`}></i>
+                <span className="text-secondary" style={{ width: "80px" }}>{row.label}</span>
+                <span className="fw-semibold">{row.value}</span>
+              </li>
+            ))}
+          </ul>
+
+          <div className="card-body d-flex gap-2">
+            <Link to="/orders" className="btn btn-outline-dark flex-grow-1">
+              <i className="bi bi-receipt me-1"></i>My orders
+            </Link>
+            <button type="button" className="btn btn-warning fw-semibold flex-grow-1" onClick={handleLogout}>
+              <i className="bi bi-box-arrow-right me-1"></i>Logout
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default ProfilePage;
+
+
+
+
+A25. frontend/src/pages/ProductListPage.jsx
+
+import { useEffect, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+
+import SearchBar from "../components/products/SearchBar.jsx";
+import ProductCard from "../components/products/ProductCard.jsx";
+import AlertMessage from "../components/common/AlertMessage.jsx";
+import Loader from "../components/common/Loader.jsx";
+import { getProducts } from "../services/productService.js";
+import { addToCart } from "../services/cartService.js";
+import { useAuth } from "../context/AuthContext.jsx";
+import { useToast } from "../context/ToastContext.jsx";
+
+// Milestones 2 + 3: product list, search by name/category, Add to Cart
+function ProductListPage() {
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams(); // reads ?category=Books from the Home page tiles
+  const { isLoggedIn } = useAuth();
+  const { showToast } = useToast();
+
+  const [products, setProducts] = useState(null); // null = still loading
+  const [searchText, setSearchText] = useState(searchParams.get("category") ?? "");
+  const [error, setError] = useState("");
+  const [addedCounts, setAddedCounts] = useState({}); // { product_id: times added }
+
+  // Load all products once
+  useEffect(() => {
+    getProducts()
+      .then((data) => setProducts(Array.isArray(data) ? data : []))
+      .catch((err) => setError(err.message));
+  }, []);
+
+  const handleAddToCart = async (product) => {
+    if (!isLoggedIn) {
+      navigate("/login", { state: { from: "/products", message: "Please log in to add items to your cart." } });
+      return;
+    }
+    try {
+      await addToCart(product.product_id, 1); // POST /api/cart/add
+      setAddedCounts((prev) => ({ ...prev, [product.product_id]: (prev[product.product_id] ?? 0) + 1 }));
+      showToast(`${product.product_name} was added to your cart.`, "success");
+    } catch (err) {
+      showToast(err.message, "danger"); // e.g. "Only 5 'Apron' in stock."
+    }
+  };
+
+  // Loading failed → error; still loading → spinner
+  if (error) return <AlertMessage type="danger" message={error} />;
+  if (!products) return <Loader text="Loading products..." />;
+
+  // Search: keep products whose name OR category contains the typed text
+  const search = searchText.trim().toLowerCase();
+  const filteredProducts = products.filter(
+    (product) =>
+      product.product_name.toLowerCase().includes(search) ||
+      product.category.category_name.toLowerCase().includes(search)
+  );
+
+  return (
+    <>
+      <div className="d-flex flex-wrap justify-content-between align-items-end gap-2 mb-3">
+        <div>
+          <h1 className="h3 fw-bold mb-0">Products</h1>
+          <p className="text-secondary mb-0">
+            {filteredProducts.length} of {products.length} products
+          </p>
+        </div>
+      </div>
+
+      <SearchBar value={searchText} onChange={setSearchText} />
+
+      {filteredProducts.length === 0 ? (
+        <div className="text-center py-5 bg-white rounded-3 shadow-sm">
+          <i className="bi bi-search display-5 text-secondary"></i>
+          <p className="mt-3 mb-0">No products found.</p>
+        </div>
+      ) : (
+        // 1 card per row on phones, 2 on tablets, 3 on laptops, 4 on wide screens
+        <div className="row row-cols-1 row-cols-sm-2 row-cols-lg-3 row-cols-xl-4 g-4">
+          {filteredProducts.map((product) => (
+            <div className="col" key={product.product_id}>
+              <ProductCard
+                product={product}
+                onAddToCart={handleAddToCart}
+                addedCount={addedCounts[product.product_id] ?? 0}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+export default ProductListPage;
+
+
+A26. frontend/src/pages/ProductDetailsPage.jsx
+
+import { useEffect, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+
+import AlertMessage from "../components/common/AlertMessage.jsx";
+import Loader from "../components/common/Loader.jsx";
+import { getProductById } from "../services/productService.js";
+import { addToCart } from "../services/cartService.js";
+import { useAuth } from "../context/AuthContext.jsx";
+import { useToast } from "../context/ToastContext.jsx";
+import { iconFor, imageFor } from "../utils/productImages.js";
+
+// Milestone 2 + 3: one product, with Add to Cart
+function ProductDetailsPage() {
+  const { productId } = useParams(); // the ":productId" part of the URL
+  const navigate = useNavigate();
+  const { isLoggedIn } = useAuth();
+  const { showToast } = useToast();
+
+  const [product, setProduct] = useState(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    getProductById(productId)
+      .then((data) => setProduct(data))
+      .catch((err) => setError(err.message)); // e.g. "Product not found."
+  }, [productId]);
+
+  const handleAddToCart = async () => {
+    if (!isLoggedIn) {
+      navigate("/login", { state: { from: `/products/${productId}`, message: "Please log in to add items to your cart." } });
+      return;
+    }
+    try {
+      await addToCart(product.product_id, 1);
+      showToast(`${product.product_name} was added to your cart.`, "success");
+    } catch (err) {
+      showToast(err.message, "danger");
+    }
+  };
+
+  if (error) return <AlertMessage type="danger" message={error} />;
+  if (!product) return <Loader text="Loading product..." />;
+
+  const inStock = product.available_quantity > 0;
+  const image = imageFor(product.product_name);
+
+  return (
+    <>
+      {/* Breadcrumb: Products > Apron */}
+      <nav aria-label="breadcrumb">
+        <ol className="breadcrumb">
+          <li className="breadcrumb-item"><Link to="/products">Products</Link></li>
+          <li className="breadcrumb-item active" aria-current="page">{product.product_name}</li>
+        </ol>
+      </nav>
+
+      <div className="card border-0 shadow-sm">
+        <div className="row g-0">
+          {/* Picture */}
+          <div className="col-md-5 border-end d-flex align-items-center justify-content-center bg-white rounded-start p-3">
+            {image ? (
+              <img src={image} alt={product.product_name} className="img-fluid" style={{ maxHeight: "360px" }} />
+            ) : (
+              <i className={`bi ${iconFor(product.category.category_name)} text-secondary`} style={{ fontSize: "6rem" }}></i>
+            )}
+          </div>
+
+          {/* Details */}
+          <div className="col-md-7">
+            <div className="card-body p-4 p-md-5">
+              <span className="badge text-bg-light border mb-2">{product.category.category_name}</span>
+              <h1 className="h2 fw-bold">{product.product_name}</h1>
+              <p className="display-6 fw-bold my-3">₹{product.price}</p>
+              <p className="text-secondary">{product.description || "No description available."}</p>
+
+              <p className={`fw-semibold ${inStock ? "text-success" : "text-danger"}`}>
+                <i className={`bi ${inStock ? "bi-check-circle" : "bi-x-circle"} me-1`}></i>
+                {inStock ? `In stock: ${product.available_quantity}` : "Out of Stock"}
+              </p>
+
+              <div className="d-flex flex-wrap gap-2 mt-4">
+                <button type="button" className="btn btn-warning btn-lg fw-semibold" disabled={!inStock} onClick={handleAddToCart}>
+                  <i className="bi bi-cart-plus me-2"></i>
+                  {inStock ? "Add to Cart" : "Out of Stock"}
+                </button>
+                <Link to="/products" className="btn btn-outline-dark btn-lg">
+                  Continue shopping
+                </Link>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+export default ProductDetailsPage;
+
+
+
+
+A27. frontend/src/pages/CartPage.jsx
+
+import { useCallback, useEffect, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+
+import CartItemRow from "../components/cart/CartItemRow.jsx";
+import AlertMessage from "../components/common/AlertMessage.jsx";
+import Loader from "../components/common/Loader.jsx";
+import { getCartItems, getCartSummary, removeCartItem, updateCartItem } from "../services/cartService.js";
+import { getProducts } from "../services/productService.js";
+import { useToast } from "../context/ToastContext.jsx";
+
+// Milestone 3: cart (view, update quantity, remove, total, checkout)
+function CartPage() {
+  const navigate = useNavigate();
+  const { showToast } = useToast();
+
+  const [items, setItems] = useState([]);
+  const [summary, setSummary] = useState(null); // null until the backend answers
+  const [stockById, setStockById] = useState({}); // { product_id: available_quantity }
+  const [error, setError] = useState("");
+
+  // Load the cart, the totals and the stock together (3 requests at once)
+  const loadCart = useCallback(async () => {
+    try {
+      const [cartItems, cartSummary, products] = await Promise.all([
+        getCartItems(),
+        getCartSummary(),
+        getProducts(),
+      ]);
+      const stock = {};
+      products.forEach((product) => {
+        stock[product.product_id] = product.available_quantity;
+      });
+      setItems(cartItems);
+      setSummary(cartSummary);
+      setStockById(stock);
+    } catch (err) {
+      setError(err.message);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadCart();
+  }, [loadCart]);
+
+  // After each change we reload, so the total updates automatically
+  const handleUpdate = async (cartItemId, quantity) => {
+    try {
+      await updateCartItem(cartItemId, quantity);
+      await loadCart();
+      showToast("Quantity updated.", "success");
+    } catch (err) {
+      showToast(err.message, "danger");
+    }
+  };
+
+  const handleRemove = async (cartItemId) => {
+    try {
+      await removeCartItem(cartItemId);
+      await loadCart();
+      showToast("Item removed from your cart.", "info");
+    } catch (err) {
+      showToast(err.message, "danger");
+    }
+  };
+
+  if (error && !summary) return <AlertMessage type="danger" message={error} />;
+  if (!summary) return <Loader text="Loading your cart..." />;
+
+  // Empty cart: friendly message
+  if (items.length === 0) {
+    return (
+      <div className="text-center py-5 bg-white rounded-3 shadow-sm">
+        <i className="bi bi-cart-x display-4 text-secondary"></i>
+        <h1 className="h4 fw-bold mt-3">Your cart is empty.</h1>
+        <p className="text-secondary">Find something you like and add it here.</p>
+        <Link to="/products" className="btn btn-warning fw-semibold">Browse products</Link>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <h1 className="h3 fw-bold mb-3">
+        <i className="bi bi-cart3 me-2"></i>Your Cart
+      </h1>
+
+      <div className="row g-4">
+        {/* Left: the items */}
+        <div className="col-lg-8">
+          <div className="card border-0 shadow-sm">
+            <div className="list-group list-group-flush">
+              {items.map((item) => (
+                <CartItemRow
+                  key={item.cart_item_id}
+                  item={item}
+                  stock={stockById[item.product.product_id] ?? 0}
+                  onUpdate={handleUpdate}
+                  onRemove={handleRemove}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Right: order summary (numbers come from /api/cart/summary) */}
+        <div className="col-lg-4">
+          <div className="card border-0 shadow-sm">
+            <div className="card-body">
+              <h2 className="h5 fw-bold mb-3">Order summary</h2>
+              <div className="d-flex justify-content-between mb-2">
+                <span className="text-secondary">Items</span>
+                <span>{summary.total_quantity}</span>
+              </div>
+              <div className="d-flex justify-content-between mb-2">
+                <span className="text-secondary">Delivery</span>
+                <span className="text-success">Free</span>
+              </div>
+              <hr />
+              <div className="d-flex justify-content-between fs-5 fw-bold mb-3">
+                <span>Total</span>
+                <span>₹{summary.total_amount}</span>
+              </div>
+              {/* Enabled only if the cart isn't empty */}
+              <button
+                type="button"
+                className="btn btn-warning fw-semibold w-100"
+                disabled={items.length === 0}
+                onClick={() => navigate("/checkout")}
+              >
+                Proceed to Checkout <i className="bi bi-arrow-right ms-1"></i>
+              </button>
+              <Link to="/products" className="btn btn-link w-100 mt-2 text-decoration-none">
+                Continue shopping
+              </Link>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+export default CartPage;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
