@@ -1,0 +1,785 @@
+A6. frontend/src/context/AuthContext.jsx
+
+import { createContext, useContext, useEffect, useState } from "react";
+import PropTypes from "prop-types";
+
+import { getCurrentUser, loginUser } from "../services/authService.js";
+import { clearToken, getToken, saveToken } from "../services/tokenStorage.js";
+import { SESSION_EXPIRED_EVENT } from "../services/apiClient.js";
+import { useToast } from "./ToastContext.jsx";
+
+// Shares "who is logged in" with every component
+const AuthContext = createContext(null);
+
+export function AuthProvider({ children }) {
+  const { showToast } = useToast();
+
+  // The logged-in user ({ user_id, name, email, mobile, role }), or null
+  const [user, setUser] = useState(null);
+  // true while we check a saved token on startup (only if there is one)
+  const [loading, setLoading] = useState(() => Boolean(getToken()));
+
+  // On startup: if a token was saved, ask the backend who it belongs to
+  useEffect(() => {
+    if (!getToken()) return;
+    getCurrentUser()
+      .then((me) => setUser(me))
+      .catch(() => {
+        clearToken(); // expired or invalid: forget it
+        setUser(null);
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  // apiClient sends this signal when the backend answers 401 (token expired)
+  useEffect(() => {
+    const handleSessionExpired = () => {
+      setUser(null);
+      showToast("Your session expired. Please log in again.", "info");
+    };
+    window.addEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
+  }, [showToast]);
+
+  // Log in: get a token, save it, then load the user (incl. role)
+  const login = async (email, password) => {
+    const { access_token: accessToken } = await loginUser(email, password);
+    saveToken(accessToken);
+    const me = await getCurrentUser();
+    setUser(me);
+    return me;
+  };
+
+  // Log out: forget the token and the user
+  const logout = () => {
+    clearToken();
+    setUser(null);
+  };
+
+  const value = { user, loading, isLoggedIn: user !== null, login, logout };
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+AuthProvider.propTypes = {
+  children: PropTypes.node.isRequired,
+};
+
+// Shortcut: const { user, login } = useAuth();
+// eslint-disable-next-line react-refresh/only-export-components
+export const useAuth = () => useContext(AuthContext);
+
+
+
+A28. frontend/src/pages/CheckoutPage.jsx
+
+import { useEffect, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+
+import AlertMessage from "../components/common/AlertMessage.jsx";
+import Loader from "../components/common/Loader.jsx";
+import OrderItemsTable from "../components/orders/OrderItemsTable.jsx";
+import { getCartItems, getCartSummary } from "../services/cartService.js";
+import { placeOrder } from "../services/orderService.js";
+import { useToast } from "../context/ToastContext.jsx";
+
+// The two payment methods. value = what the backend expects, label/icon/note = what users see
+const PAYMENT_METHODS = [
+  {
+    value: "CREDIT_CARD",
+    label: "Credit Card",
+    icon: "bi-credit-card",
+    note: "Paid now through our payment gateway.",
+  },
+  {
+    value: "CASH_ON_DELIVERY",
+    label: "Cash on Delivery",
+    icon: "bi-cash-coin",
+    note: "Pay in cash when your order arrives.",
+  },
+];
+
+// Milestone 5: review the order, choose payment, place the order
+function CheckoutPage() {
+  const navigate = useNavigate();
+  const { showToast } = useToast();
+
+  const [items, setItems] = useState(null); // null = not loaded yet
+  const [total, setTotal] = useState("0");
+  const [paymentMethod, setPaymentMethod] = useState(""); // nothing chosen yet
+  const [placing, setPlacing] = useState(false); // true while the request runs
+  const [error, setError] = useState("");
+
+  // Load the cart to review it
+  useEffect(() => {
+    Promise.all([getCartItems(), getCartSummary()])
+      .then(([cartItems, summary]) => {
+        setItems(cartItems);
+        setTotal(summary.total_amount);
+      })
+      .catch((err) => setError(err.message));
+  }, []);
+
+  const handlePlaceOrder = async (event) => {
+    event.preventDefault();
+    setPlacing(true);
+    setError("");
+    try {
+      // Backend: (card → payment gateway) → checks stock → creates the order → empties the cart
+      const order = await placeOrder(paymentMethod);
+      showToast(`Order #${order.order_id} placed successfully!`, "success");
+      navigate(`/orders/${order.order_id}`, { replace: true });
+    } catch (err) {
+      // e.g. "Payment failed..." (gateway down) or "Only 2 'Apron' in stock"
+      setError(err.message);
+      showToast(err.message, "danger");
+      setPlacing(false);
+    }
+  };
+
+  if (!items) return error ? <AlertMessage type="danger" message={error} /> : <Loader text="Loading your order..." />;
+
+  if (items.length === 0) {
+    return (
+      <div className="text-center py-5 bg-white rounded-3 shadow-sm">
+        <i className="bi bi-cart-x display-4 text-secondary"></i>
+        <h1 className="h4 fw-bold mt-3">Your cart is empty.</h1>
+        <Link to="/products" className="btn btn-warning fw-semibold mt-2">Browse products</Link>
+      </div>
+    );
+  }
+
+  // Reshape cart items like order lines, so OrderItemsTable can show them
+  const lines = items.map((item) => ({
+    order_detail_id: item.cart_item_id,
+    quantity: item.quantity,
+    price: item.product.price,
+    product: { product_name: item.product.product_name },
+  }));
+
+  return (
+    <>
+      <h1 className="h3 fw-bold mb-3">
+        <i className="bi bi-bag-check me-2"></i>Checkout
+      </h1>
+      <AlertMessage type="danger" message={error} />
+
+      <div className="row g-4">
+        {/* Left: review */}
+        <div className="col-lg-7">
+          <div className="card border-0 shadow-sm">
+            <div className="card-header bg-white fw-bold py-3">1. Review your order</div>
+            <OrderItemsTable details={lines} total={total} />
+          </div>
+        </div>
+
+        {/* Right: payment */}
+        <div className="col-lg-5">
+          <form onSubmit={handlePlaceOrder} className="card border-0 shadow-sm">
+            <div className="card-header bg-white fw-bold py-3">2. Choose a payment method</div>
+            <div className="card-body">
+              {/* One clickable box per method (radio buttons) */}
+              <div className="list-group mb-4">
+                {PAYMENT_METHODS.map((method) => (
+                  <label
+                    key={method.value}
+                    className={`list-group-item list-group-item-action d-flex gap-3 py-3 ${
+                      paymentMethod === method.value ? "border-warning bg-warning-subtle" : ""
+                    }`}
+                  >
+                    <input
+                      className="form-check-input flex-shrink-0 mt-1"
+                      type="radio"
+                      name="paymentMethod"
+                      value={method.value}
+                      checked={paymentMethod === method.value}
+                      onChange={(event) => setPaymentMethod(event.target.value)}
+                    />
+                    <span>
+                      <i className={`bi ${method.icon} me-2`}></i>
+                      <strong>{method.label}</strong>
+                      <small className="d-block text-secondary">{method.note}</small>
+                    </span>
+                  </label>
+                ))}
+              </div>
+
+              <div className="d-flex justify-content-between fs-5 fw-bold mb-3">
+                <span>Total to pay</span>
+                <span>₹{total}</span>
+              </div>
+
+              {/* Enabled only when a method is chosen; disabled while placing */}
+              <button type="submit" className="btn btn-warning btn-lg fw-semibold w-100" disabled={!paymentMethod || placing}>
+                {placing ? (
+                  <><span className="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>Placing order...</>
+                ) : (
+                  <><i className="bi bi-lock me-2"></i>Place order</>
+                )}
+              </button>
+              <Link to="/cart" className="btn btn-link w-100 mt-2 text-decoration-none">
+                Back to cart
+              </Link>
+            </div>
+          </form>
+        </div>
+      </div>
+    </>
+  );
+}
+
+export default CheckoutPage;
+
+
+
+
+A29. frontend/src/pages/OrderHistoryPage.jsx
+
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+
+import AlertMessage from "../components/common/AlertMessage.jsx";
+import Loader from "../components/common/Loader.jsx";
+import OrderStatusBadge from "../components/orders/OrderStatusBadge.jsx";
+import { getMyOrders } from "../services/orderService.js";
+
+// Milestone 4: my orders only (the backend filters by the token's user)
+function OrderHistoryPage() {
+  const [orders, setOrders] = useState(null); // null = not loaded yet
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    getMyOrders()
+      .then((data) => setOrders([...data].sort((a, b) => b.order_id - a.order_id))) // newest first
+      .catch((err) => setError(err.message));
+  }, []);
+
+  if (error) return <AlertMessage type="danger" message={error} />;
+  if (!orders) return <Loader text="Loading your orders..." />;
+
+  return (
+    <>
+      <h1 className="h3 fw-bold mb-3">
+        <i className="bi bi-receipt me-2"></i>Order History
+      </h1>
+
+      {orders.length === 0 ? (
+        <div className="text-center py-5 bg-white rounded-3 shadow-sm">
+          <i className="bi bi-inbox display-4 text-secondary"></i>
+          <p className="mt-3">No orders found.</p>
+          <Link to="/products" className="btn btn-warning fw-semibold">Start shopping</Link>
+        </div>
+      ) : (
+        <div className="card border-0 shadow-sm">
+          <div className="table-responsive">
+            <table className="table table-hover align-middle mb-0">
+              <thead className="table-light">
+                <tr>
+                  <th>Order</th>
+                  <th>Date</th>
+                  <th>Items</th>
+                  <th>Total</th>
+                  <th>Status</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {orders.map((order) => (
+                  <tr key={order.order_id}>
+                    <td className="fw-semibold">#{order.order_id}</td>
+                    <td>{new Date(order.order_date).toLocaleDateString("en-IN")}</td>
+                    {/* reduce = add up the quantity of every line */}
+                    <td>{order.details.reduce((sum, line) => sum + line.quantity, 0)}</td>
+                    <td className="fw-semibold">₹{order.total_amount}</td>
+                    <td><OrderStatusBadge status={order.status} /></td>
+                    <td className="text-end">
+                      <Link to={`/orders/${order.order_id}`} className="btn btn-sm btn-outline-dark">
+                        View details
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+export default OrderHistoryPage;
+
+
+
+
+A30. frontend/src/pages/OrderDetailsPage.jsx
+
+import { useEffect, useState } from "react";
+import { Link, useParams } from "react-router-dom";
+
+import AlertMessage from "../components/common/AlertMessage.jsx";
+import Loader from "../components/common/Loader.jsx";
+import OrderItemsTable from "../components/orders/OrderItemsTable.jsx";
+import OrderStatusBadge from "../components/orders/OrderStatusBadge.jsx";
+import { cancelOrder, getOrderDetails } from "../services/orderService.js";
+import { useToast } from "../context/ToastContext.jsx";
+
+// One order: products, qty, prices, total, status + Cancel
+function OrderDetailsPage() {
+  const { orderId } = useParams(); // must match ":orderId" in App.jsx
+  const { showToast } = useToast();
+
+  const [order, setOrder] = useState(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    getOrderDetails(orderId)
+      .then((data) => setOrder(data))
+      .catch((err) => setError(err.message)); // 404 = not found or not yours
+  }, [orderId]);
+
+  const handleCancel = async () => {
+    if (!window.confirm(`Cancel order #${order.order_id}?`)) return;
+    try {
+      const updated = await cancelOrder(order.order_id); // backend: status "cancelled" + stock back
+      setOrder(updated);
+      showToast(`Order #${updated.order_id} was cancelled.`, "info");
+    } catch (err) {
+      showToast(err.message, "danger"); // e.g. "Order is already cancelled."
+    }
+  };
+
+  if (error) return <AlertMessage type="danger" message={error} />;
+  if (!order) return <Loader text="Loading order..." />;
+
+  // The info boxes at the top
+  const facts = [
+    { icon: "bi-calendar3", label: "Date", value: new Date(order.order_date).toLocaleDateString("en-IN") },
+    { icon: "bi-wallet2", label: "Payment", value: order.payment_method.replaceAll("_", " ") },
+    { icon: "bi-currency-rupee", label: "Total", value: `₹${order.total_amount}` },
+  ];
+
+  return (
+    <>
+      <nav aria-label="breadcrumb">
+        <ol className="breadcrumb">
+          <li className="breadcrumb-item"><Link to="/orders">My Orders</Link></li>
+          <li className="breadcrumb-item active" aria-current="page">Order #{order.order_id}</li>
+        </ol>
+      </nav>
+
+      <div className="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+        <h1 className="h3 fw-bold mb-0">Order #{order.order_id}</h1>
+        <OrderStatusBadge status={order.status} />
+      </div>
+
+      <div className="row g-3 mb-4">
+        {facts.map((fact) => (
+          <div className="col-md-4" key={fact.label}>
+            <div className="bg-white rounded-3 shadow-sm p-3 d-flex align-items-center gap-3 h-100">
+              <i className={`bi ${fact.icon} fs-3 text-warning`}></i>
+              <div>
+                <div className="small text-secondary">{fact.label}</div>
+                <div className="fw-semibold text-capitalize">{fact.value.toLowerCase()}</div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="card border-0 shadow-sm">
+        <div className="card-header bg-white fw-bold py-3">Items in this order</div>
+        <OrderItemsTable details={order.details} total={order.total_amount} />
+      </div>
+
+      {/* Only orders that aren't cancelled can be cancelled */}
+      {order.status !== "cancelled" && (
+        <div className="text-end mt-3">
+          <button type="button" className="btn btn-outline-danger" onClick={handleCancel}>
+            <i className="bi bi-x-circle me-1"></i>Cancel order
+          </button>
+        </div>
+      )}
+    </>
+  );
+}
+
+export default OrderDetailsPage;
+
+
+
+
+
+A31. frontend/src/pages/AllOrdersPage.jsx
+
+import { useEffect, useState } from "react";
+
+import AlertMessage from "../components/common/AlertMessage.jsx";
+import Loader from "../components/common/Loader.jsx";
+import OrderItemsTable from "../components/orders/OrderItemsTable.jsx";
+import OrderStatusBadge from "../components/orders/OrderStatusBadge.jsx";
+import { getAllOrders } from "../services/orderService.js";
+
+// Admin & Support: every customer's orders, placed AND cancelled
+function AllOrdersPage() {
+  const [orders, setOrders] = useState(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    getAllOrders() // GET /api/admin/orders (403 for customers)
+      .then((data) => setOrders(Array.isArray(data) ? data : []))
+      .catch((err) => setError(err.message));
+  }, []);
+
+  if (error) return <AlertMessage type="danger" message={error} />;
+  if (!orders) return <Loader text="Loading all orders..." />;
+
+  // Numbers for the boxes at the top
+  const cancelledCount = orders.filter((order) => order.status === "cancelled").length;
+  const customerCount = new Set(orders.map((order) => order.user_id)).size; // Set = unique ids
+  const stats = [
+    { icon: "bi-receipt", label: "Total orders", value: orders.length, colour: "text-primary" },
+    { icon: "bi-check-circle", label: "Placed", value: orders.length - cancelledCount, colour: "text-success" },
+    { icon: "bi-x-circle", label: "Cancelled", value: cancelledCount, colour: "text-secondary" },
+    { icon: "bi-people", label: "Customers", value: customerCount, colour: "text-warning" },
+  ];
+
+  return (
+    <>
+      <h1 className="h3 fw-bold mb-3">
+        <i className="bi bi-clipboard-data me-2"></i>All Orders
+      </h1>
+
+      <div className="row row-cols-2 row-cols-md-4 g-3 mb-4">
+        {stats.map((stat) => (
+          <div className="col" key={stat.label}>
+            <div className="bg-white rounded-3 shadow-sm p-3 h-100">
+              <i className={`bi ${stat.icon} fs-4 ${stat.colour}`}></i>
+              <div className="fs-3 fw-bold">{stat.value}</div>
+              <div className="small text-secondary">{stat.label}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {orders.length === 0 ? (
+        <div className="text-center py-5 bg-white rounded-3 shadow-sm">
+          <p className="mb-0">No orders found.</p>
+        </div>
+      ) : (
+        orders.map((order) => (
+          <div className="card border-0 shadow-sm mb-3" key={order.order_id}>
+            <div className="card-header bg-white py-3 d-flex flex-wrap justify-content-between align-items-center gap-2">
+              <div>
+                <span className="fw-bold">Order #{order.order_id}</span>
+                <span className="text-secondary ms-2">
+                  <i className="bi bi-person me-1"></i>
+                  {order.user?.name ?? "Unknown"} (ID {order.user_id}) · {order.user?.email ?? "no email"}
+                </span>
+              </div>
+              <div className="d-flex align-items-center gap-3 small text-secondary">
+                <span><i className="bi bi-calendar3 me-1"></i>{new Date(order.order_date).toLocaleDateString("en-IN")}</span>
+                <span><i className="bi bi-wallet2 me-1"></i>{(order.payment_method ?? "").replaceAll("_", " ")}</span>
+                <OrderStatusBadge status={order.status} />
+              </div>
+            </div>
+            <OrderItemsTable details={order.details ?? []} total={order.total_amount ?? 0} />
+          </div>
+        ))
+      )}
+    </>
+  );
+}
+
+export default AllOrdersPage;
+
+
+
+
+A32. frontend/src/pages/NotFoundPage.jsx (new)
+
+import { Link } from "react-router-dom";
+
+// Shown for any URL that doesn't match a page
+function NotFoundPage() {
+  return (
+    <div className="text-center py-5">
+      <div className="display-1 fw-bold text-warning">404</div>
+      <h1 className="h4 fw-bold">Page not found</h1>
+      <p className="text-secondary">The page you&apos;re looking for doesn&apos;t exist.</p>
+      <Link to="/" className="btn btn-dark">Go to the home page</Link>
+    </div>
+  );
+}
+
+export default NotFoundPage;
+
+
+
+
+
+
+
+
+
+PART B: Backend (card payment)
+
+B1. provider/main.py (in your project root, not inside app)
+
+"""
+Fake notification provider: stands in for an outside email/SMS service. NOT part of our app.
+
+Student notes:
+- It runs as its own container (`provider` in docker-compose.yml). Our API calls it over
+  HTTP at http://provider:9000, as it would call a real provider on the internet.
+- Switch its MODE to see how our API copes, at http://localhost:9000/docs or with curl:
+      curl -X PUT localhost:9000/mode/fail
+    ok    answers 200 at once
+    fail  answers 503 at once
+    slow  answers after 10 seconds (longer than our API is willing to wait)
+  `docker compose stop provider` is a fourth case: nobody answers at all.
+- Week 4: the same mode also controls POST /pay (fake card payments):
+    ok -> payment accepted, fail -> payment refused, slow -> payment times out
+- The mode lives in memory: after a restart it's "ok" again.
+"""
+
+import asyncio
+from typing import Literal
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+app = FastAPI(title="Fake Notification Provider")
+mode = "ok"
+
+
+class Payment(BaseModel):
+    """A card payment request from our API (Week 4): who pays, and how much."""
+
+    user_id: int
+    amount: str  # sent as text, e.g. "1100.00"
+
+
+class Notification(BaseModel):
+    to: str
+    message: str
+
+
+@app.post("/notify")
+async def notify(notification: Notification):
+    """'Send' a notification. What happens depends on the mode."""
+    if mode == "fail":
+        raise HTTPException(503, "Provider is down (mode=fail)")
+    if mode == "slow":
+        await asyncio.sleep(10)
+    print(f"SENT to {notification.to}: {notification.message}", flush=True)
+    return {"status": "sent"}
+
+
+@app.post("/pay")
+async def pay(payment: Payment):
+    """Week 4: fake card payment gateway. Follows the SAME mode as notifications:
+    ok -> paid, fail -> 503 (payment refused), slow -> too slow (our API gives up)."""
+    if mode == "fail":
+        raise HTTPException(503, "Payment gateway is down (mode=fail)")
+    if mode == "slow":
+        await asyncio.sleep(10)
+    print(f"PAID by user {payment.user_id}: Rs{payment.amount}", flush=True)
+    return {"status": "paid"}
+
+
+@app.put("/mode/{new_mode}")
+async def set_mode(new_mode: Literal["ok", "fail", "slow"]):
+    """Switch mode: ok, fail or slow."""
+    global mode
+    mode = new_mode
+    return {"mode": mode}
+
+
+
+
+B2. app/services/payment_service.py (new)
+
+"""Week 4: fake card payments through the provider container (POST /pay).
+
+Student notes:
+- Only CREDIT_CARD orders are charged. CASH_ON_DELIVERY is paid later, at the door.
+- Switch the provider's mode to see what happens (http://localhost:9000/docs):
+    ok    -> payment accepted, the order is placed
+    fail  -> payment refused, NO order is created, the cart stays as it was
+    slow  -> we stop waiting after TIMEOUT_SECONDS: payment failed
+- Unlike notifications, a failed payment MUST stop the checkout, so this one raises.
+- It's a normal (sync) function because checkout is a normal (sync) endpoint.
+"""
+
+import logging
+from decimal import Decimal
+
+import httpx
+
+from app.core.config import settings
+from app.utils.exceptions import PaymentFailedError
+
+logger = logging.getLogger(__name__)
+
+TIMEOUT_SECONDS = 2  # never wait longer than this for the gateway
+
+# Same provider as notifications, different path: ".../notify" -> ".../pay"
+PAY_URL = settings.notification_provider_url.rsplit("/", 1)[0] + "/pay"
+
+
+def charge(user_id: int, amount: Decimal) -> None:
+    """Ask the gateway to take `amount`. Returns if paid, raises PaymentFailedError if not."""
+    try:
+        response = httpx.post(PAY_URL, json={"user_id": user_id, "amount": str(amount)}, timeout=TIMEOUT_SECONDS)
+        response.raise_for_status()  # 4xx / 5xx -> HTTPStatusError
+    except httpx.HTTPError as exc:  # covers bad status, timeout and "nobody answered"
+        logger.warning("Payment of Rs%s by user %s FAILED (%s)", amount, user_id, type(exc).__name__)
+        raise PaymentFailedError(
+            "Payment failed: the card payment could not be completed. "
+            "Please try again or choose Cash on Delivery."
+        ) from exc
+
+    logger.info("Payment of Rs%s by user %s accepted", amount, user_id)
+
+
+
+B3. app/services/order_service.py
+
+"""Check and order rules"""
+
+from decimal import Decimal
+
+from sqlalchemy.orm import Session
+
+from app.repositories import cart_repository, order_repository
+from app.services import payment_service
+from app.utils.exceptions import BusinessRuleError, NotFoundError
+
+
+def checkout(db: Session, user_id: int, data):
+    items = cart_repository.get_cart_items(db, user_id)
+    if not items:
+        raise BusinessRuleError("Your cart is empty.")
+
+    # checking everything before changing anything
+    for item in items:
+        if not item.product.is_active:
+            raise BusinessRuleError(f"'{item.product.product_name}' is no longer available.")
+        if item.quantity > item.product.available_quantity:
+            raise BusinessRuleError(f" Only {item.product.available_quantity} '{item.product.product_name}' in stock")
+
+    # total amt calulated by the server
+    total = sum((item.product.price * item.quantity for item in items), Decimal("0"))
+
+    # Week 4: card orders are paid BEFORE anything is saved.
+    # If the gateway refuses, charge() raises -> no order, stock and cart untouched.
+    if data.payment_method == "CREDIT_CARD":
+        payment_service.charge(user_id, total)
+
+    # Creating the order: each lines create price paid today
+    lines = [{"product_id": item.product_id, "quantity": item.quantity, "price": item.product.price} for item in items]
+
+    order = order_repository.create_order(db, user_id, data.payment_method, total, lines)
+
+    # reducing stock and emptying the cart
+    for item in items:
+        item.product.available_quantity -= item.quantity
+        cart_repository.delete_cart_item(db, item)
+
+    db.commit()
+    db.refresh(order)
+    return order
+
+
+async def order_history_async(db, user_id: int):
+    return await order_repository.get_orders_by_user_async(db, user_id)
+
+
+def order_details(db: Session, user_id: int, order_id: int):
+    order = order_repository.get_order_by_id(db, order_id)
+    if order is None or order.user_id != user_id:
+        raise NotFoundError("Order not found.")
+    return order
+
+
+def all_orders(db: Session):
+    return order_repository.get_all_orders(db)
+
+
+def cancel_order(db: Session, user_id: int, order_id: int):
+    order = order_details(db, user_id, order_id)
+
+    if order.status == "cancelled":
+        raise BusinessRuleError("Order is already cancelled.")
+
+    for line in order.details:
+        line.product.available_quantity += line.quantity
+
+    order.status = "cancelled"
+    db.commit()
+    db.refresh(order)
+    return order
+
+
+
+
+B4. app/utils/exceptions.py: add this at the very bottom (keep everything else)
+
+
+
+class PaymentFailedError(AppError):
+    """Week 4: the card payment was refused (gateway down, error or too slow)."""
+
+    status_code = status.HTTP_402_PAYMENT_REQUIRED
+
+
+
+B5. app/tests/test_payment.py (new)
+
+# Week 4: card payments must succeed before an order exists; cash orders skip the gateway
+from app.services import payment_service
+from app.utils.exceptions import PaymentFailedError
+
+
+def test_card_payment_accepted_places_order(client, auth_headers, monkeypatch):
+    charged = []
+    monkeypatch.setattr(payment_service, "charge", lambda user_id, amount: charged.append(amount))
+
+    client.post("/api/cart/add", json={"product_id": 1, "quantity": 1}, headers=auth_headers)
+    r = client.post("/api/orders/checkout", json={"payment_method": "CREDIT_CARD"}, headers=auth_headers)
+
+    assert r.status_code == 201
+    assert len(charged) == 1  # the gateway was asked exactly once
+
+
+def test_card_payment_refused_creates_no_order(client, auth_headers, monkeypatch):
+    def gateway_down(user_id, amount):
+        raise PaymentFailedError("Payment failed")
+
+    monkeypatch.setattr(payment_service, "charge", gateway_down)
+
+    client.post("/api/cart/add", json={"product_id": 1, "quantity": 1}, headers=auth_headers)
+    r = client.post("/api/orders/checkout", json={"payment_method": "CREDIT_CARD"}, headers=auth_headers)
+
+    assert r.status_code == 402
+    assert client.get("/api/orders/me", headers=auth_headers).json() == []  # no order
+    assert len(client.get("/api/cart", headers=auth_headers).json()) == 1  # cart kept
+
+
+def test_cash_on_delivery_skips_the_gateway(client, auth_headers, monkeypatch):
+    def must_not_be_called(user_id, amount):
+        raise AssertionError("cash orders must not be charged")
+
+    monkeypatch.setattr(payment_service, "charge", must_not_be_called)
+
+    client.post("/api/cart/add", json={"product_id": 1, "quantity": 1}, headers=auth_headers)
+    r = client.post("/api/orders/checkout", json={"payment_method": "CASH_ON_DELIVERY"}, headers=auth_headers)
+    assert r.status_code == 201
+
+
+
+
+
+
+
