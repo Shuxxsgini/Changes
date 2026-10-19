@@ -1,0 +1,23 @@
+import urllib.request
+from datetime import datetime
+import boto3
+
+s3 = boto3.client("s3")
+
+def lambda_handler(event, context):
+    try:
+        urllib.request.urlopen("http://54.242.82.22/api/products", timeout=10)
+        status = "OK - backend works"
+    except Exception as e:
+        status = f"DOWN - {e}"
+
+    print(status)  # shows up in CloudWatch Logs
+    s3.put_object(
+        Bucket="health-logs-ks-1011",
+        Key=f"health-{datetime.now():%Y-%m-%d_%H-%M-%S}.txt",
+        Body=status,
+    )
+
+    if status.startswith("DOWN"):
+        raise Exception(status)  # lets the CloudWatch alarm catch failures
+    return {"status": status}
